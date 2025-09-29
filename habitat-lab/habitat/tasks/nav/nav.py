@@ -20,6 +20,7 @@ from habitat.core.embodied_task import (
     EmbodiedTask,
     Measure,
     SimulatorTaskAction,
+    MultiAgentEmbodiedTask
 )
 from habitat.core.logging import logger
 from habitat.core.registry import registry
@@ -386,28 +387,34 @@ class EpisodicCompassSensor(HeadingSensor):
     def _get_uuid(self, *args: Any, **kwargs: Any) -> str:
         return self.cls_uuid
 
-    def get_agent_start_pos(self, episode, task):
-        return episode.start_position, quaternion_from_coeff(
-            episode.start_rotation
+    def get_agent_start_pos(self, episode, task, agent_id):
+        agent_config = get_agent_config(self._sim.habitat_config, agent_id=agent_id)
+        return agent_config.start_position, quaternion_from_coeff(
+            agent_config.start_rotation
         )
 
-    def get_agent_current_pose(self, sim):
-        agent_state = self._sim.get_agent_state()
+    def get_agent_current_pose(self, sim, agent_id):
+        agent_state = self._sim.get_agent_state(agent_id)
         return agent_state.position, agent_state.rotation
 
-    def get_observation(
-        self, observations, episode, task, *args: Any, **kwargs: Any
-    ):
-        _, rotation_world_start = self.get_agent_start_pos(episode, task)
-        _, rotation_world_agent = self.get_agent_current_pose(self._sim)
+    def get_observation(self, observations, episode, task, *args, **kwargs):
+        observations = []
+        num_agents = len(self._sim.agents)
+        for agent_id in range(num_agents):
 
-        if isinstance(rotation_world_agent, quaternion.quaternion):
-            return self._quat_to_xy_heading(
-                rotation_world_agent.inverse() * rotation_world_start
-            )
-        else:
-            raise ValueError("Agent's rotation was not a quaternion")
+            _, rotation_world_start = self.get_agent_start_pos(episode, task, agent_id)
+            _, rotation_world_agent = self.get_agent_current_pose(self._sim, agent_id)
+            # print("Agent", agent_id, "Rotation", rotation_world_agent, "Rotation world start", rotation_world_start)
 
+            if isinstance(rotation_world_agent, quaternion.quaternion):
+                observations.append(self._quat_to_xy_heading(
+                    rotation_world_agent.inverse() * rotation_world_start
+                ))
+            else:
+                raise ValueError("Agent's rotation was not a quaternion")
+        if len(observations) == 1:
+            return observations[0]
+        return observations
 
 @registry.register_sensor(name="GPSSensor")
 class EpisodicGPSSensor(Sensor):
@@ -446,35 +453,42 @@ class EpisodicGPSSensor(Sensor):
             dtype=np.float32,
         )
 
-    def get_agent_start_pos(self, episode, task):
-        return episode.start_position, quaternion_from_coeff(
-            episode.start_rotation
+    def get_agent_start_pos(self, episode, task, agent_id):
+        agent_config = get_agent_config(self._sim.habitat_config, agent_id=agent_id)
+        return agent_config.start_position, quaternion_from_coeff(
+            agent_config.start_rotation
         )
 
-    def get_agent_current_pose(self, sim):
-        agent_state = self._sim.get_agent_state()
+    def get_agent_current_pose(self, sim, agent_id):
+        agent_state = self._sim.get_agent_state(agent_id)
         return agent_state.position, agent_state.rotation
 
     def get_observation(
         self, observations, episode, task, *args: Any, **kwargs: Any
     ):
 
-        start_position, rotation_world_start = self.get_agent_start_pos(
-            episode, task
-        )
-        origin = np.array(start_position, dtype=np.float32)
-
-        agent_position, _ = self.get_agent_current_pose(self._sim)
-
-        agent_position = quaternion_rotate_vector(
-            rotation_world_start.inverse(), agent_position - origin
-        )
-        if self._dimensionality == 2:
-            return np.array(
-                [-agent_position[2], agent_position[0]], dtype=np.float32
+        observations = []
+        num_agents = len(self._sim.agents)
+        for agent_id in range(num_agents):
+            start_position, rotation_world_start = self.get_agent_start_pos(
+                episode, task, agent_id
             )
-        else:
-            return agent_position.astype(np.float32)
+            origin = np.array(start_position, dtype=np.float32)
+
+            agent_position, _ = self.get_agent_current_pose(self._sim, agent_id)
+
+            agent_position = quaternion_rotate_vector(
+                rotation_world_start.inverse(), agent_position - origin
+            )
+            if self._dimensionality == 2:
+                observations.append(np.array(
+                    [-agent_position[2], agent_position[0]], dtype=np.float32
+                ))
+            else:
+                observations.append(agent_position.astype(np.float32))
+        if len(observations) == 1:
+            return observations[0]
+        return observations
 
 
 @registry.register_sensor
@@ -556,6 +570,9 @@ class Success(Measure):
         distance_to_target = task.measurements.measures[
             DistanceToGoal.cls_uuid
         ].get_metric()
+
+        if isinstance(distance_to_target, dict):
+            distance_to_target = min(distance_to_target.values())
 
         if (
             hasattr(task, "is_stop_called")
@@ -642,6 +659,8 @@ class SPL(Measure):
         self._start_end_episode_distance = task.measurements.measures[
             DistanceToGoal.cls_uuid
         ].get_metric()
+        if isinstance(self._start_end_episode_distance, dict):
+            self._start_end_episode_distance = self._start_end_episode_distance[0]
         self.update_metric(  # type:ignore
             episode=episode, task=task, *args, **kwargs
         )
@@ -746,6 +765,8 @@ class SoftSPL(SPL):
         self._start_end_episode_distance = task.measurements.measures[
             DistanceToGoal.cls_uuid
         ].get_metric()
+        if isinstance(self._start_end_episode_distance, dict):
+            self._start_end_episode_distance = self._start_end_episode_distance[0]
         self.update_metric(episode=episode, task=task, *args, **kwargs)  # type: ignore
 
     def update_metric(self, episode, task, *args: Any, **kwargs: Any):
@@ -753,6 +774,8 @@ class SoftSPL(SPL):
         distance_to_target = task.measurements.measures[
             DistanceToGoal.cls_uuid
         ].get_metric()
+        if isinstance(distance_to_target, dict):
+            distance_to_target = min(distance_to_target.values())
 
         ep_soft_success = max(
             0, (1 - distance_to_target / self._start_end_episode_distance)
@@ -788,11 +811,18 @@ class Collisions(Measure):
 
     def update_metric(self, episode, action, *args: Any, **kwargs: Any):
         if self._metric is None:
-            self._metric = {"count": 0, "is_collision": False}
-        self._metric["is_collision"] = False
-        if self._sim.previous_step_collided:
-            self._metric["count"] += 1
-            self._metric["is_collision"] = True
+            self._metric = {}
+            for agent_id in range(len(self._sim.agents)):
+                self._metric[agent_id] = {"count": 0, "is_collision": False}
+
+        for agent_id in range(len(self._sim.agents)):
+            self._metric[agent_id]["is_collision"] = False
+            if self._sim.previous_step_collided[agent_id]:
+                self._metric[agent_id]["count"] += 1
+                self._metric[agent_id]["is_collision"] = True
+
+        if len(self._sim.agents) == 1:
+            self._metric == self._metric[0]
 
 
 @registry.register_measure
@@ -1197,7 +1227,7 @@ class DistanceToGoal(Measure):
     def __init__(
         self, sim: Simulator, config: "DictConfig", *args: Any, **kwargs: Any
     ):
-        self._previous_position: Optional[Tuple[float, float, float]] = None
+        self._previous_positions: List[Optional[Tuple[float, float, float]]] = None
         self._sim = sim
         self._config = config
         self._episode_view_points: Optional[
@@ -1212,15 +1242,15 @@ class DistanceToGoal(Measure):
     def _get_uuid(self, *args: Any, **kwargs: Any) -> str:
         return self.cls_uuid
 
-    def get_base_position(self):
-        return self._sim.get_agent_state().position
+    def get_base_position(self, agent_id):
+        return self._sim.get_agent_state(agent_id).position
 
     def get_end_effector_position(self):
         raise NotImplementedError
 
     def reset_metric(self, episode, *args: Any, **kwargs: Any):
-        self._previous_position = None
-        self._metric = None
+        self._previous_positions = {}
+        self._metrics = {}
         if self._distance_to == "VIEW_POINTS":
             self._episode_view_points = [
                 view_point.agent_state.position
@@ -1232,48 +1262,55 @@ class DistanceToGoal(Measure):
     def update_metric(
         self, episode: NavigationEpisode, *args: Any, **kwargs: Any
     ):
-        if self._distance_from == "END_EFFECTOR":
-            current_position = self.get_end_effector_position()
-        else:
-            current_position = self.get_base_position()
-
-        if self._previous_position is None or not np.allclose(
-            self._previous_position, current_position, atol=1e-4
-        ):
-            if self._distance_to == "EUCLIDEAN_POINT":
-                distance_to_target = min(
-                    [
-                        np.linalg.norm(
-                            np.array(goal.position) - current_position,
-                            ord=2,
-                            axis=-1,
-                        )
-                        for goal in getattr(episode, self._goals_attr)
-                    ]
-                )
-            elif self._distance_to == "POINT":
-                distance_to_target = self._sim.geodesic_distance(
-                    current_position,
-                    [
-                        goal.position
-                        for goal in getattr(episode, self._goals_attr)
-                    ],
-                    episode,
-                )
-            elif self._distance_to == "VIEW_POINTS":
-                distance_to_target = self._sim.geodesic_distance(
-                    current_position, self._episode_view_points, episode
-                )
+        for agent_id in range(len(self._sim.agents)):
+            if self._distance_from == "END_EFFECTOR":
+                current_position = self.get_end_effector_position()
             else:
-                logger.error(
-                    f"Non valid distance_to parameter was provided: {self._distance_to }"
+                current_position = self.get_base_position(agent_id)
+
+            if not agent_id in self._previous_positions or not np.allclose(
+                self._previous_positions[agent_id], current_position, atol=1e-4
+            ):
+                if self._distance_to == "EUCLIDEAN_POINT":
+                    distance_to_target = min(
+                        [
+                            np.linalg.norm(
+                                np.array(goal.position) - current_position,
+                                ord=2,
+                                axis=-1,
+                            )
+                            for goal in getattr(episode, self._goals_attr)
+                        ]
+                    )
+                elif self._distance_to == "POINT":
+                    distance_to_target = self._sim.geodesic_distance(
+                        current_position,
+                        [
+                            goal.position
+                            for goal in getattr(episode, self._goals_attr)
+                        ],
+                        episode,
+                    )
+                elif self._distance_to == "VIEW_POINTS":
+                    distance_to_target = self._sim.geodesic_distance(
+                        current_position, self._episode_view_points, episode
+                    )
+                else:
+                    logger.error(
+                        f"Non valid distance_to parameter was provided: {self._distance_to }"
+                    )
+                self._previous_positions[agent_id] = (
+                    current_position[0],
+                    current_position[1],
+                    current_position[2],
                 )
-            self._previous_position = (
-                current_position[0],
-                current_position[1],
-                current_position[2],
-            )
-            self._metric = distance_to_target
+
+                self._metrics[agent_id] = distance_to_target
+
+        if len(self._sim.agents) == 1:
+            self._metric = self._metrics[0]
+        else:
+            self._metric = self._metrics
 
 
 @registry.register_measure
@@ -1504,6 +1541,8 @@ class DistanceToGoalReward(Measure):
         self._previous_distance = task.measurements.measures[
             self.distance_to_goal_cls.cls_uuid
         ].get_metric()
+        if isinstance(self._previous_distance, dict):
+            self._previous_distance = min(self._previous_distance.values())
         self.update_metric(episode=episode, task=task, *args, **kwargs)  # type: ignore
 
     def update_metric(
@@ -1512,6 +1551,8 @@ class DistanceToGoalReward(Measure):
         distance_to_target = task.measurements.measures[
             self.distance_to_goal_cls.cls_uuid
         ].get_metric()
+        if isinstance(distance_to_target, dict):
+            distance_to_target = min(distance_to_target.values())
         self._metric = -(distance_to_target - self._previous_distance)
         self._previous_distance = distance_to_target
 
@@ -1866,6 +1907,42 @@ class NavigationTask(EmbodiedTask):
                     float(k) for k in episode.start_rotation
                 ]
                 agent_config.is_set_start_state = True
+        return config
+
+    def _check_episode_is_active(self, *args: Any, **kwargs: Any) -> bool:
+        return not getattr(self, "is_stop_called", False)
+
+@registry.register_task(name="MultiAgentNav-v0")
+class MultiAgentNavigationTask(MultiAgentEmbodiedTask):
+    def __init__(
+        self,
+        config: "DictConfig",
+        sim: Simulator,
+        dataset: Optional[Dataset] = None,
+    ) -> None:
+        super().__init__(config=config, sim=sim, dataset=dataset)
+
+    def overwrite_sim_config(self, config: Any, episode: Episode) -> Any:
+        with read_write(config):
+            config.simulator.scene = episode.scene_id
+            if (
+                episode.start_position is not None
+                and episode.start_rotation is not None
+            ):        
+                num_agents = len(config.simulator.agents)
+                # base = np.quaternion(*episode.start_rotation)
+                for i in range(num_agents):
+                    agent_config = get_agent_config(config.simulator, agent_id=i)
+                    agent_config.start_position = episode.start_position
+
+                    agent_config.start_rotation = [
+                        float(k) for k in episode.start_rotation
+                    ]
+                    # angle = 2 * np.pi * i / num_agents
+                    # yaw_rot = quaternion.from_euler_angles([0, angle, 0])
+                    # new_quat = yaw_rot * base
+                    # agent_config.start_rotation = [new_quat.x, new_quat.y, new_quat.z, new_quat.w]
+                    agent_config.is_set_start_state = True
         return config
 
     def _check_episode_is_active(self, *args: Any, **kwargs: Any) -> bool:

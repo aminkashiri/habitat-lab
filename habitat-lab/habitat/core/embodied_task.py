@@ -388,3 +388,32 @@ class EmbodiedTask:
 
     def seed(self, seed: int) -> None:
         return
+
+
+class MultiAgentEmbodiedTask(EmbodiedTask):
+    def step(self, action: List[Any], episode: Episode):
+        # STOP
+        if 0 in action.values():
+            #!myTODO: Fix for GOAT
+            # if self.current_task_idx != self.num_tasks - 1:
+            #     self.is_stop_called = False
+            #     self.update_goal = True
+            # else:
+            self.is_stop_called = True
+            #     self.update_goal = False
+            
+            observations = self._sim.get_all_observations()
+        else:
+            observations = self._sim.step(action)
+        observations.update(
+        self.sensor_suite.get_observations(
+                observations=observations,
+                episode=episode,
+                action=action,
+                task=self,
+            )
+        )
+        self._is_episode_active = self._check_episode_is_active(
+            observations=observations, action=action, episode=episode
+        )
+        return observations

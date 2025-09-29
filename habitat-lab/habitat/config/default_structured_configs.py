@@ -270,10 +270,19 @@ class HeadingSensorConfig(LabSensorConfig):
 class CompassSensorConfig(LabSensorConfig):
     type: str = "CompassSensor"
 
+@attr.s(auto_attribs=True, slots=True)
+class MultiAgentCompassSensorConfig(LabSensorConfig):
+    type: str = "MultiAgentCompassSensor"
+
 
 @attr.s(auto_attribs=True, slots=True)
 class GPSSensorConfig(LabSensorConfig):
     type: str = "GPSSensor"
+    dimensionality: int = 2
+
+@attr.s(auto_attribs=True, slots=True)
+class MultiAgentGPSSensorConfig(LabSensorConfig):
+    type: str = "MultiAgentGPSSensor"
     dimensionality: int = 2
 
 
@@ -1579,10 +1588,22 @@ cs.store(
     node=GPSSensorConfig,
 )
 cs.store(
+    package="habitat.task.lab_sensors.multiagent_gps_sensor",
+    group="habitat/task/lab_sensors",
+    name="multiagent_gps_sensor",
+    node=MultiAgentGPSSensorConfig
+)
+cs.store(
     package="habitat.task.lab_sensors.compass_sensor",
     group="habitat/task/lab_sensors",
     name="compass_sensor",
     node=CompassSensorConfig,
+)
+cs.store(
+    package="habitat.task.lab_sensors.multiagent_compass_sensor",
+    group="habitat/task/lab_sensors",
+    name="multiagent_compass_sensor",
+    node=MultiAgentCompassSensorConfig,
 )
 cs.store(
     package="habitat.task.lab_sensors.robot_start_gps_sensor",
