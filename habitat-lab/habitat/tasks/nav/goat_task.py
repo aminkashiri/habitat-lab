@@ -158,36 +158,42 @@ class MultiGoalSensor(Sensor):
             )
             return None
 
-        goals, vocabulary = [], []
+        goals = []
         for goal_idx, goal_val in enumerate(episode.tasks):
             
             goal = {}
+            goal_type = goal_val[1]
+            goal_category = goal_val[0]
+            assert goal_category == episode.goals[goal_idx][0]["object_category"]
 
-            if goal_val[1] == "image":
-                goal["category"] = episode.goals[goal_idx][0]["object_category"]
+            goal["category"] = goal_category
+            goal["image"] = None
+            goal["description"] = None
+
+            if goal_type == "image":
                 img_goal_id = goal_val[-1]
                 goal["image"] = self.get_image_goal(episode, goal_idx, img_goal_id)
-            else:
-                goal["image"] = None
-            
-            if goal_val[1] == "description":
-                goal["category"] = episode.goals[goal_idx][0]["object_category"]
+            elif goal_type == "description":
                 goal["description"] = episode.goals[goal_idx][0]["lang_desc"]
-            else:
-                goal["description"] = None
             
-            if goal_val[1] == "object":
-                goal["category"] = episode.goals[goal_idx][0][0]["object_category"]
-
             goals.append(goal)
         return goals
 
 
 @registry.register_task(name="Goat-v1")
-class GoatTask(NavigationTask):  # TODO
+class GoatTask(NavigationTask):
     r"""A GOAT Task class for a task specific methods.
     Used to explicitly state a type of the task in config.
     """
+    
+    current_task_idx: int
+    update_goal: bool
+
+    def reset(self, episode):
+        self.current_task_idx = 0
+        self.update_goal = False
+        self.num_tasks = len(episode.goals)
+        return super().reset(episode)
 
 
 @attr.s(auto_attribs=True, kw_only=True)

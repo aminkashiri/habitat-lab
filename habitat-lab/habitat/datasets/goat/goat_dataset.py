@@ -198,9 +198,10 @@ class GoatDatasetV1(PointNavDatasetV1):
                 assert len(dset_same_cat_goals) == 1, f"more than 1 goal categories for {goal_category}"
 
                 if goal_type == "object":
-                    composite_episode.goals.append(dset_same_cat_goals)
+                    composite_episode.goals.append(dset_same_cat_goals[0])
                 else:
                     goal_inst = [x for x in dset_same_cat_goals[0] if x['object_id'] == goal_inst_id]
+                    assert len(goal_inst) == 1
                     composite_episode.goals.append(goal_inst)
 
             self.episodes.append(composite_episode)  # type: ignore [attr-defined]

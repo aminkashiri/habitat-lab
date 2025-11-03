@@ -708,6 +708,7 @@ class GOATSubTaskSPL(SPL):
         return "goat_sub-task_spl"
 
     def reset_metric(self, episode, task, *args: Any, **kwargs: Any):
+        self.reset_subtask = False
         task.measurements.check_measure_dependencies(
             self.uuid,
             [GOATDistanceToSubGoal.cls_uuid, GOATSubTaskSuccess.cls_uuid],
@@ -725,23 +726,30 @@ class GOATSubTaskSPL(SPL):
     def update_metric(
         self, episode, task: EmbodiedTask, *args: Any, **kwargs: Any
     ):
-        ep_success = task.measurements.measures[
-            GOATSubTaskSuccess.cls_uuid
-        ].get_metric()
+        if self.reset_subtask:
+            self.reset_metric(episode, task, *args, **kwargs)
+        else:
+            ep_success = task.measurements.measures[
+                GOATSubTaskSuccess.cls_uuid
+            ].get_metric()
 
-        current_position = self._sim.get_agent_state().position
-        self._agent_episode_distance += self._euclidean_distance(
-            current_position, self._previous_position
-        )
-
-        self._previous_position = current_position
-
-        self._metric = ep_success * (
-            self._start_end_episode_distance
-            / max(
-                self._start_end_episode_distance, self._agent_episode_distance
+            current_position = self._sim.get_agent_state().position
+            self._agent_episode_distance += self._euclidean_distance(
+                current_position, self._previous_position
             )
-        )
+
+            self._previous_position = current_position
+
+            self._metric = ep_success * (
+                self._start_end_episode_distance
+                / max(
+                    self._start_end_episode_distance, self._agent_episode_distance
+                )
+            )
+
+        if task.update_goal:
+            self.reset_subtask = True
+            task.update_goal = False
 
 
 @registry.register_measure
@@ -1325,109 +1333,35 @@ class GOATDistanceToSubGoal(DistanceToGoal):
         super().__init__(sim, config, **kwargs)
 
     def reset_metric(self, episode, *args: Any, **kwargs: Any):
-        self._previous_position = None
-        self._metric = None
-
-        kwargs["task"].num_tasks = len(kwargs["observations"]["multigoal"])
-        kwargs["task"].current_task_idx = 0
-        kwargs["task"].update_goal = False
-        self.force_metric_update = False
-
-        if self._distance_to == "VIEW_POINTS":
-            self.update_goal_viewpoints(episode)
+        self.subtask_idx = -1
+        self.reset_subtask(episode)
         self.update_metric(episode=episode, *args, **kwargs)  # type: ignore
-
-    def update_goal_viewpoints(self, episode, current_goal_idx=0):
-
-        self._episode_view_points = []
-
-        try:
-            for goal in getattr(episode, self._goals_attr)[current_goal_idx]:
-                if type(goal) == dict:
-                    for vp in goal["view_points"]:
-                        self._episode_view_points.append(
-                            vp['agent_state']['position']
-                        )
-                else:
-                    if type(goal[0]) != dict:
-                        for g in goal[0]:
-                            for vp in g["view_points"]:
-                                self._episode_view_points.append(
-                                    vp['agent_state']['position']
-                                )
-                    else:
-                        for vp in goal[0]["view_points"]:
-                            self._episode_view_points.append(
-                                vp['agent_state']['position']
-                            )
-        except Exception as e:
-            print(e)
-            import pdb;pdb.set_trace()
-
+    
+    def reset_subtask(self, episode):
+        self.subtask_idx += 1
+        self._previous_positions = {}
+        self._metrics = {}
+        self.reset_next_step = False
+        episode._shortest_path_cache = None
+        self.update_goal_viewpoints(episode, self.subtask_idx)
+    
+    def update_goal_viewpoints(self, episode, task_idx):
+        if self._distance_to == "VIEW_POINTS":
+            self._episode_view_points = []
+            for goal in getattr(episode, self._goals_attr)[task_idx]:
+                self._episode_view_points.extend(
+                    [vp['agent_state']['position'] for vp in goal["view_points"]]
+                )
 
     def update_metric(
         self, episode: NavigationEpisode, *args: Any, **kwargs: Any
     ):
+        if self.reset_next_step:
+            self.reset_subtask(episode)
+        super().update_metric(episode, *args, **kwargs)
 
-        if self._distance_from == "END_EFFECTOR":
-            current_position = self.get_end_effector_position()
-        else:
-            current_position = self.get_base_position()
-
-        if self._previous_position is not None:
-            recent_position_didnt_change = np.allclose(self._previous_position, current_position, atol=1e-4)
-
-        if self._previous_position is None or not recent_position_didnt_change or self.force_metric_update:
-            episode_cache = None
-            if self._distance_to == "EUCLIDEAN_POINT":
-                distance_to_target = min(
-                    [
-                        np.linalg.norm(
-                            np.array(goal.position) - current_position,
-                            ord=2,
-                            axis=-1,
-                        )
-                        for goal in getattr(episode, self._goals_attr)
-                    ]
-                )
-            elif self._distance_to == "POINT":
-                distance_to_target = self._sim.geodesic_distance(
-                    current_position,
-                    [
-                        goal.position
-                        for goal in getattr(episode, self._goals_attr)
-                    ],
-                    episode_cache,
-                )
-            elif self._distance_to == "VIEW_POINTS":
-                distance_to_target = self._sim.geodesic_distance(current_position, self._episode_view_points, episode_cache)
-            else:
-                logger.error(
-                    f"Non valid distance_to parameter was provided: {self._distance_to }"
-                )
-            self._previous_position = (
-                current_position[0],
-                current_position[1],
-                current_position[2],
-            )
-            self._metric = distance_to_target
-
-            # if distance_to_target < 0.26:
-            #     import pdb;pdb.set_trace()
-
-            if self.force_metric_update:
-                self.force_metric_update = False
-    
         if kwargs["task"].update_goal:
-            kwargs["task"].current_task_idx += 1
-            print(
-                "Updating goal (viewpoints); new current_task_idx:",
-                kwargs["task"].current_task_idx,
-            )
-
-            self.force_metric_update = True
-            self.update_goal_viewpoints(episode, kwargs["task"].current_task_idx)
-            kwargs["task"].update_goal = False
+            self.reset_next_step = True
             
 
 
@@ -1659,6 +1593,7 @@ class GOATSubTaskStopAction(StopAction):
         ``step``.
         """
         if task.current_task_idx != task.num_tasks - 1:
+            task.current_task_idx += 1
             task.is_stop_called = False
             task.update_goal = True
         else:
