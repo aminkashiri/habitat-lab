@@ -229,7 +229,7 @@ class SensorSuite:
         return Observations(self.sensors, *args, **kwargs)
 
 
-class MulatiAgentSensorSuite:
+class MultiAgentSensorSuite:
     r"""Represents a set of sensors, with each sensor being identified
     through a unique id.
     """
@@ -266,8 +266,8 @@ class MulatiAgentSensorSuite:
         return {
             agent_id: sensor_suite.get_observations(
                 observations[agent_id], *args, **kwargs
-            )
-            for agent_id, sensor_suite in self.sensor_suites.items()
+            ) 
+            for agent_id, sensor_suite in self.sensor_suites.items() if agent_id in observations
         }
 
 

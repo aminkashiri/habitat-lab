@@ -611,6 +611,9 @@ class GOATSubTaskSuccess(Success):
             GOATDistanceToSubGoal.cls_uuid
         ].get_metric()
 
+        if isinstance(distance_to_target, dict):
+            distance_to_target = min(distance_to_target.values())
+
         if (
             hasattr(task, "is_stop_called")
             # and task.is_stop_called  # type: ignore
@@ -719,6 +722,9 @@ class GOATSubTaskSPL(SPL):
         self._start_end_episode_distance = task.measurements.measures[
             GOATDistanceToSubGoal.cls_uuid
         ].get_metric()
+        #! myTODO: Strogner metric.
+        if isinstance(self._start_end_episode_distance, dict):
+            self._start_end_episode_distance = min(self._start_end_episode_distance.values())
         self.update_metric(  # type:ignore
             episode=episode, task=task, *args, **kwargs
         )
@@ -1513,7 +1519,9 @@ class MoveForwardAction(SimulatorTaskAction):
             )
             if snapped_global_pos == global_pos:
                 self._sim.robot.base_pos = snapped_global_pos
-        return self._sim.step(HabitatSimActions.move_forward)
+        agent_id = kwargs.get("agent_id",-1)
+        action = {agent_id:HabitatSimActions.move_forward} if agent_id >=0 else HabitatSimActions.move_forward
+        return self._sim.step(action)
 
 
 @registry.register_task_action
@@ -1539,7 +1547,9 @@ class TurnLeftAction(SimulatorTaskAction):
             )
             self._sim.robot.base_rot = self._sim.updated_angle
             self._sim.current_angle = self._sim.updated_angle
-        return self._sim.step(HabitatSimActions.turn_left)
+        agent_id = kwargs.get("agent_id",-1)
+        action = {agent_id:HabitatSimActions.turn_left} if agent_id >=0 else HabitatSimActions.turn_left
+        return self._sim.step(action)
 
 
 @registry.register_task_action
@@ -1566,7 +1576,9 @@ class TurnRightAction(SimulatorTaskAction):
 
             self._sim.robot.base_rot = self._sim.updated_angle
             self._sim.current_angle = self._sim.updated_angle
-        return self._sim.step(HabitatSimActions.turn_right)
+        agent_id = kwargs.get("agent_id",-1)
+        action = {agent_id:HabitatSimActions.turn_right} if agent_id >=0 else HabitatSimActions.turn_right
+        return self._sim.step(action)
 
 
 @registry.register_task_action
@@ -1581,7 +1593,7 @@ class StopAction(SimulatorTaskAction):
         ``step``.
         """
         task.is_stop_called = True  # type: ignore
-        return self._sim.get_observations_at()  # type: ignore
+        return self._sim.get_observations_at(agent_id=kwargs.get("agent_id"))  # type: ignore
 
 
 @registry.register_task_action
@@ -1592,14 +1604,16 @@ class GOATSubTaskStopAction(StopAction):
         r"""Update ``_metric``, this method is called from ``Env`` on each
         ``step``.
         """
-        if task.current_task_idx != task.num_tasks - 1:
-            task.current_task_idx += 1
-            task.is_stop_called = False
-            task.update_goal = True
-        else:
-            task.update_goal = False
-            task.is_stop_called = True  # type: ignore
-        return self._sim.get_observations_at()  # type: ignore
+        if not task.update_goal and not task.is_stop_called:
+            if task.current_task_idx != task.num_tasks - 1:
+                task.current_task_idx += 1
+                task.is_stop_called = False
+                task.update_goal = True
+            else:
+                task.update_goal = False
+                task.is_stop_called = True  # type: ignore
+        
+        return self._sim.get_observations_at(agent_id=kwargs.get("agent_id"))  # type: ignore
 
 
 @registry.register_task_action

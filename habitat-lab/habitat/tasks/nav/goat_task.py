@@ -13,7 +13,7 @@ import habitat_sim
 from habitat.core.logging import logger
 from habitat.core.registry import registry
 from habitat.core.simulator import RGBSensor, Sensor, SensorTypes
-from habitat.tasks.nav.nav import NavigationEpisode, NavigationTask
+from habitat.tasks.nav.nav import NavigationEpisode, NavigationTask, MultiAgentNavigationTask
 from habitat.utils.geometry_utils import quaternion_from_coeff
 from habitat_sim import bindings as hsim
 from habitat_sim.agent.agent import AgentState, SixDOFPose
@@ -48,23 +48,30 @@ class MultiGoalSensor(Sensor):
     ):
         self._sim = sim
         self._dataset = dataset
+        self._get_rgb_sensor_space()
 
-        sensors = self._sim.sensor_suite.sensors
+        self._current_episode_id = None
+        self._current_image_goal = None
+
+        super().__init__(config=config)
+
+    def _get_rgb_sensor_space(self):
+        if hasattr(self._sim.sensor_suite, "sensor_suites"):
+            sensor_suite = self._sim.sensor_suite.sensor_suites[0]
+        else:
+            sensor_suite = self._sim.sensor_suite
+
+        sensors = sensor_suite.sensors.items()
         rgb_sensor_uuids = [
             uuid
-            for uuid, sensor in sensors.items()
+            for uuid, sensor in sensors
             if isinstance(sensor, RGBSensor)
         ]
         if len(rgb_sensor_uuids) != 1:
             raise ValueError(
                 f"ImageGoalNav requires one RGB sensor, {len(rgb_sensor_uuids)} detected"
             )
-
-        (self._rgb_sensor_uuid,) = rgb_sensor_uuids
-        self._current_episode_id = None
-        self._current_image_goal = None
-
-        super().__init__(config=config)
+        self._rgb_sensor_obs_space = sensor_suite.observation_spaces.spaces[rgb_sensor_uuids[0]]
 
     def _get_uuid(self, *args: Any, **kwargs: Any) -> str:
         return self.cls_uuid
@@ -74,14 +81,11 @@ class MultiGoalSensor(Sensor):
 
     def _get_observation_space(self, *args: Any, **kwargs: Any):
         max_tasks = 10
-        max_semantic_classes = 1000
 
         goal_dict = {
             "category": spaces.Text(min_length=0, max_length=50),
             "description": spaces.Text(min_length=0, max_length=120),
-            "image": self._sim.sensor_suite.observation_spaces.spaces[
-                self._rgb_sensor_uuid
-            ],
+            "image": self._rgb_sensor_obs_space,
         }
 
         return spaces.Tuple([spaces.Dict(goal_dict) for _ in range(max_tasks)])
@@ -186,6 +190,17 @@ class GoatTask(NavigationTask):
     Used to explicitly state a type of the task in config.
     """
     
+    current_task_idx: int
+    update_goal: bool
+
+    def reset(self, episode):
+        self.current_task_idx = 0
+        self.update_goal = False
+        self.num_tasks = len(episode.goals)
+        return super().reset(episode)
+
+@registry.register_task(name="MultiAgentGoat-v1")
+class MultiAgentGoatTask(MultiAgentNavigationTask):
     current_task_idx: int
     update_goal: bool
 

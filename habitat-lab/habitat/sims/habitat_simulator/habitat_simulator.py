@@ -37,7 +37,7 @@ from habitat.core.simulator import (
     ShortestPathPoint,
     Simulator,
     VisualObservation,
-    MulatiAgentSensorSuite
+    MultiAgentSensorSuite
 )
 from habitat.core.spaces import Space
 
@@ -606,25 +606,35 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
         position: Optional[List[float]] = None,
         rotation: Optional[List[float]] = None,
         keep_agent_at_new_pose: bool = False,
+        agent_id: int = 0,
     ) -> Optional[Observations]:
-        current_state = self.get_agent_state()
+        single_agent = False
+        if agent_id is None:
+            single_agent = True
+            agent_id = 0
+        current_state = self.get_agent_state(agent_id)
         if position is None or rotation is None:
             success = True
         else:
             success = self.set_agent_state(
-                position, rotation, reset_sensors=False
+                position, rotation, agent_id, reset_sensors=False
             )
 
         if success:
-            sim_obs = self.get_sensor_observations()
+            sim_obs = self.get_sensor_observations(agent_ids=[agent_id])
 
-            self._prev_sim_obs = sim_obs
+            if single_agent:
+                sim_obs = sim_obs[agent_id]
+                self._prev_sim_obs = sim_obs
+            else:
+                self._prev_sim_obs[agent_id] = sim_obs[agent_id]
 
             observations = self._sensor_suite.get_observations(sim_obs)
             if not keep_agent_at_new_pose:
                 self.set_agent_state(
                     current_state.position,
                     current_state.rotation,
+                    agent_id,
                     reset_sensors=False,
                 )
             return observations
@@ -677,7 +687,7 @@ class MultiAgentHabitatSim(HabitatSim):
                 agent_sensors.append(sensor)
             sensors.append(agent_sensors)
 
-        self._sensor_suite = MulatiAgentSensorSuite(sensors)
+        self._sensor_suite = MultiAgentSensorSuite(sensors)
 
         self.sim_config = self.create_sim_config(self._sensor_suite)
         self._current_scene = self.sim_config.sim_cfg.scene_id
@@ -696,7 +706,7 @@ class MultiAgentHabitatSim(HabitatSim):
         self._prev_sim_obs: Optional[Observations] = None
 
     def create_sim_config(
-        self, _sensor_suite: MulatiAgentSensorSuite
+        self, _sensor_suite: MultiAgentSensorSuite
     ) -> habitat_sim.Configuration:
         sim_config = habitat_sim.SimulatorConfiguration()
         # Check if Habitat-Sim is post Scene Config Update
