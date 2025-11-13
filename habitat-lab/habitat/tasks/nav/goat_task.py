@@ -3,7 +3,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Dict
 
 import attr
 import numpy as np
@@ -13,6 +13,7 @@ import habitat_sim
 from habitat.core.logging import logger
 from habitat.core.registry import registry
 from habitat.core.simulator import RGBSensor, Sensor, SensorTypes
+from habitat.core.dataset import Episode
 from habitat.tasks.nav.nav import NavigationEpisode, NavigationTask, MultiAgentNavigationTask
 from habitat.utils.geometry_utils import quaternion_from_coeff
 from habitat_sim import bindings as hsim
@@ -192,12 +193,19 @@ class GoatTask(NavigationTask):
     
     current_task_idx: int
     update_goal: bool
+    stops_called: Dict[int, int]
 
     def reset(self, episode):
+        self.stops_called = {}
         self.current_task_idx = 0
         self.update_goal = False
         self.num_tasks = len(episode.goals)
         return super().reset(episode)
+    
+    def step(self, action: Dict[str, Any], episode: Episode):
+        obs = super().step(action, episode)
+        self.update_goal = False
+        return obs
 
 @registry.register_task(name="MultiAgentGoat-v1")
 class MultiAgentGoatTask(MultiAgentNavigationTask):
@@ -205,10 +213,16 @@ class MultiAgentGoatTask(MultiAgentNavigationTask):
     update_goal: bool
 
     def reset(self, episode):
+        self.stops_called = {}
         self.current_task_idx = 0
         self.update_goal = False
         self.num_tasks = len(episode.goals)
         return super().reset(episode)
+
+    def step(self, action: Dict[str, Any], episode: Episode):
+        obs = super().step(action, episode)
+        self.update_goal = False
+        return obs
 
 
 @attr.s(auto_attribs=True, kw_only=True)

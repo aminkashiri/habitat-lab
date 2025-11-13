@@ -412,8 +412,6 @@ class EpisodicCompassSensor(HeadingSensor):
                 ))
             else:
                 raise ValueError("Agent's rotation was not a quaternion")
-        if len(observations) == 1:
-            return observations[0]
         return observations
 
 @registry.register_sensor(name="GPSSensor")
@@ -486,8 +484,6 @@ class EpisodicGPSSensor(Sensor):
                 ))
             else:
                 observations.append(agent_position.astype(np.float32))
-        if len(observations) == 1:
-            return observations[0]
         return observations
 
 
@@ -599,6 +595,7 @@ class GOATSubTaskSuccess(Success):
         super().__init__(sim, config)
 
     def reset_metric(self, episode, task, *args: Any, **kwargs: Any):
+        self._metric = {}
         task.measurements.check_measure_dependencies(
             self.uuid, [GOATDistanceToSubGoal.cls_uuid]
         )
@@ -607,21 +604,20 @@ class GOATSubTaskSuccess(Success):
     def update_metric(
         self, episode, task: EmbodiedTask, *args: Any, **kwargs: Any
     ):
-        distance_to_target = task.measurements.measures[
+        agents_dist = task.measurements.measures[
             GOATDistanceToSubGoal.cls_uuid
         ].get_metric()
 
-        if isinstance(distance_to_target, dict):
-            distance_to_target = min(distance_to_target.values())
+        distance_to_target = []
+        for goal_idx, agent_id in task.stops_called.items():
+            if not self._metric.get(goal_idx) is None:
+                continue
+            distance_to_target = agents_dist[agent_id] 
+            if distance_to_target < self._success_distance:
+                self._metric[goal_idx] = 1.0
+            else:
+                self._metric[goal_idx] = 0.0
 
-        if (
-            hasattr(task, "is_stop_called")
-            # and task.is_stop_called  # type: ignore
-            and distance_to_target < self._success_distance
-        ):
-            self._metric = 1.0
-        else:
-            self._metric = 0.0
 
 
 @registry.register_measure
@@ -719,12 +715,9 @@ class GOATSubTaskSPL(SPL):
 
         self._previous_position = self._sim.get_agent_state().position
         self._agent_episode_distance = 0.0
-        self._start_end_episode_distance = task.measurements.measures[
+        self._start_end_episode_distance = min(task.measurements.measures[
             GOATDistanceToSubGoal.cls_uuid
-        ].get_metric()
-        #! myTODO: Strogner metric.
-        if isinstance(self._start_end_episode_distance, dict):
-            self._start_end_episode_distance = min(self._start_end_episode_distance.values())
+        ].get_metric().values())
         self.update_metric(  # type:ignore
             episode=episode, task=task, *args, **kwargs
         )
@@ -733,29 +726,34 @@ class GOATSubTaskSPL(SPL):
         self, episode, task: EmbodiedTask, *args: Any, **kwargs: Any
     ):
         if self.reset_subtask:
-            self.reset_metric(episode, task, *args, **kwargs)
-        else:
-            ep_success = task.measurements.measures[
-                GOATSubTaskSuccess.cls_uuid
-            ].get_metric()
+            self.reset_subtask = False
+            self._agent_episode_distance = 0.0
+            #! myTODO: Strogner metric.
+            self._start_end_episode_distance = min(task.measurements.measures[
+                GOATDistanceToSubGoal.cls_uuid
+            ].get_metric().values())
 
-            current_position = self._sim.get_agent_state().position
-            self._agent_episode_distance += self._euclidean_distance(
-                current_position, self._previous_position
+        ep_success = task.measurements.measures[
+            GOATSubTaskSuccess.cls_uuid
+        ].get_metric()
+        ep_success = ep_success.get(task.current_task_idx-1, 0.0)
+
+        current_position = self._sim.get_agent_state().position
+        self._agent_episode_distance += self._euclidean_distance(
+            current_position, self._previous_position
+        )
+
+        self._previous_position = current_position
+
+        self._metric = ep_success * (
+            self._start_end_episode_distance
+            / max(
+                self._start_end_episode_distance, self._agent_episode_distance
             )
-
-            self._previous_position = current_position
-
-            self._metric = ep_success * (
-                self._start_end_episode_distance
-                / max(
-                    self._start_end_episode_distance, self._agent_episode_distance
-                )
-            )
+        )
 
         if task.update_goal:
             self.reset_subtask = True
-            task.update_goal = False
 
 
 @registry.register_measure
@@ -835,8 +833,6 @@ class Collisions(Measure):
                 self._metric[agent_id]["count"] += 1
                 self._metric[agent_id]["is_collision"] = True
 
-        if len(self._sim.agents) == 1:
-            self._metric == self._metric[0]
 
 
 @registry.register_measure
@@ -1321,11 +1317,7 @@ class DistanceToGoal(Measure):
 
                 self._metrics[agent_id] = distance_to_target
 
-        if len(self._sim.agents) == 1:
-            self._metric = self._metrics[0]
-        else:
-            self._metric = self._metrics
-
+        self._metric = self._metrics
 
 @registry.register_measure
 class GOATDistanceToSubGoal(DistanceToGoal):
@@ -1365,11 +1357,12 @@ class GOATDistanceToSubGoal(DistanceToGoal):
         if self.reset_next_step:
             self.reset_subtask(episode)
         super().update_metric(episode, *args, **kwargs)
+        if isinstance(self._metric, float):
+            self._metric = {0: self._metric}
 
         if kwargs["task"].update_goal:
             self.reset_next_step = True
             
-
 
 @registry.register_measure
 class DistanceToGoalInstance(Measure):
@@ -1604,9 +1597,10 @@ class GOATSubTaskStopAction(StopAction):
         r"""Update ``_metric``, this method is called from ``Env`` on each
         ``step``.
         """
+        task.stops_called[kwargs.get("task_idx")] = kwargs.get("agent_id")
         if not task.update_goal and not task.is_stop_called:
-            if task.current_task_idx != task.num_tasks - 1:
-                task.current_task_idx += 1
+            task.current_task_idx += 1
+            if task.current_task_idx != task.num_tasks:
                 task.is_stop_called = False
                 task.update_goal = True
             else:
