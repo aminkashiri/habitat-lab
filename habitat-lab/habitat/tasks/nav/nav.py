@@ -1280,7 +1280,7 @@ class DistanceToGoal(Measure):
 
             if not agent_id in self._previous_positions or not np.allclose(
                 self._previous_positions[agent_id], current_position, atol=1e-4
-            ):
+            ) or kwargs.get("recalculate"): #! myTODO: A better mechanism here
                 if self._distance_to == "EUCLIDEAN_POINT":
                     distance_to_target = min(
                         [
@@ -1302,6 +1302,8 @@ class DistanceToGoal(Measure):
                         episode,
                     )
                 elif self._distance_to == "VIEW_POINTS":
+                    #! myTODO: This slows things. Better design.
+                    episode._shortest_path_cache = None
                     distance_to_target = self._sim.geodesic_distance(
                         current_position, self._episode_view_points, episode
                     )
@@ -1359,7 +1361,7 @@ class GOATDistanceToSubGoal(DistanceToGoal):
         super().update_metric(episode, *args, **kwargs)
         if isinstance(self._metric, float):
             self._metric = {0: self._metric}
-
+        
         if kwargs["task"].update_goal:
             self.reset_next_step = True
             
@@ -1606,6 +1608,112 @@ class GOATSubTaskStopAction(StopAction):
             else:
                 task.update_goal = False
                 task.is_stop_called = True  # type: ignore
+        
+        return self._sim.get_observations_at(agent_id=kwargs.get("agent_id"))  # type: ignore
+
+@registry.register_measure
+class MultiAgentGOATSuccess(Success):
+    r"""Whether or not the GOAT agent succeeded at a sub-task
+
+    This measure depends on DistanceToGoal measure.
+    """
+
+    cls_uuid: str = "multiagent_goat_success"
+
+    def __init__(
+        self, sim: Simulator, config: "DictConfig", *args: Any, **kwargs: Any
+    ):
+        super().__init__(sim, config)
+
+    def reset_metric(self, episode, task, *args: Any, **kwargs: Any):
+        self._metric = {}
+        task.measurements.check_measure_dependencies(
+            self.uuid, [MultiAgentGOATDistanceToSubGoal.cls_uuid]
+        )
+        self.update_metric(episode=episode, task=task, *args, **kwargs)  # type: ignore
+
+    def update_metric(
+        self, episode, task: EmbodiedTask, *args: Any, **kwargs: Any
+    ):
+        distance_to_subgoal = task.measurements.measures[
+            MultiAgentGOATDistanceToSubGoal.cls_uuid
+        ].get_metric()
+
+        for goal_idx, agent_id in task.stops_called.items():
+            if not self._metric.get(goal_idx) is None:
+                continue
+            # print("Stops called: ", task.stops_called)
+            # TODO: dist to subgoal is wrong
+            # print("Dist to subgoal: ", distance_to_subgoal)
+            try:
+                distance_to_target = distance_to_subgoal[goal_idx][agent_id]
+            except KeyError:
+                print("tasks stops called: ", task.stops_called, goal_idx, agent_id)
+            self._metric[goal_idx] = distance_to_target < self._success_distance
+
+@registry.register_measure
+class MultiAgentGOATDistanceToSubGoal(DistanceToGoal):
+    """The measure calculates a distance towards a sub-task goal."""
+
+    cls_uuid: str = "multiagent_goat_distance_to_sub-goal"
+
+    def __init__(
+        self, sim: Simulator, config: "DictConfig", *args: Any, **kwargs: Any
+    ):
+        super().__init__(sim, config, **kwargs)
+
+    def reset_metric(self, episode, *args: Any, **kwargs: Any):
+        self._previous_positions = {}
+        self._metrics = {}
+        episode._shortest_path_cache = None
+        self.set_goal_viewpoints(episode)
+        self.update_metric(episode=episode, *args, **kwargs)  # type: ignore
+    
+    def set_goal_viewpoints(self, episode):
+        if not self._distance_to == "VIEW_POINTS":
+            return
+
+        episode_goals = getattr(episode, self._goals_attr)
+        self.goals_viewpoints = []
+        for task_idx in range(len(episode_goals)):
+            _goal_view_points = []
+            for goal in episode_goals[task_idx]:
+                _goal_view_points.extend(
+                    [vp['agent_state']['position'] for vp in goal["view_points"]]
+                )
+            self.goals_viewpoints.append(_goal_view_points)
+
+    def update_metric(
+        self, episode: NavigationEpisode, *args: Any, **kwargs: Any
+    ):
+        final_metric = {}
+        episode_goals = getattr(episode, self._goals_attr)
+        for task_idx in range(len(episode_goals)):
+            self._episode_view_points = self.goals_viewpoints[task_idx]
+            super().update_metric(episode, *args, **kwargs, recalculate=True)
+            final_metric[task_idx] = self._metric.copy()
+
+        self._metric = final_metric
+
+
+@registry.register_task_action
+class MultiAgentGOATStopAction(StopAction):
+    """
+    Compared to GOATSubTaskStopAction, this action is for non-sequential GOAT task, and considers which agent is calling the action!
+    """
+    name: str = "multiagent_goat_stop"
+
+    def step(self, task: EmbodiedTask, *args: Any, **kwargs: Any):
+        r"""Update ``_metric``, this method is called from ``Env`` on each
+        ``step``.
+        """
+        if kwargs.get("task_idx") is None:
+            task.idle_agents += 1
+        else:
+            task.stops_called[kwargs.get("task_idx")] = kwargs.get("agent_id")
+        
+        if len(task.stops_called) == task.num_tasks:
+            task.is_stop_called = True
         
         return self._sim.get_observations_at(agent_id=kwargs.get("agent_id"))  # type: ignore
 

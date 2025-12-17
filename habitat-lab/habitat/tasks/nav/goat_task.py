@@ -209,20 +209,23 @@ class GoatTask(NavigationTask):
 
 @registry.register_task(name="MultiAgentGoat-v1")
 class MultiAgentGoatTask(MultiAgentNavigationTask):
-    current_task_idx: int
     update_goal: bool
+    idle_agents: Dict[int, bool]
 
     def reset(self, episode):
         self.stops_called = {}
-        self.current_task_idx = 0
         self.update_goal = False
         self.num_tasks = len(episode.goals)
         return super().reset(episode)
-
+    
     def step(self, action: Dict[str, Any], episode: Episode):
+        self.idle_agents = 0
         obs = super().step(action, episode)
-        self.update_goal = False
+        if len(action) == self.idle_agents:
+            self.is_stop_called = True
+        self.update_goal = True
         return obs
+    
 
 
 @attr.s(auto_attribs=True, kw_only=True)
