@@ -11,8 +11,7 @@ defaults:
   - measurements:
     - multiagent_goat_distance_to_sub-goal
     - multiagent_goat_success
-    # - goat_sub-task_spl
-    # - soft_spl
+    - multiagent_goat_spl
     - goat_top_down_map
   - lab_sensors:
     - multigoal_sensor

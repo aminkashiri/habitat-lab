@@ -524,6 +524,9 @@ class SPLMeasurementConfig(MeasurementConfig):
 class GOATSubTaskSPLMeasurementConfig(MeasurementConfig):
     type: str = "GOATSubTaskSPL"
 
+@attr.s(auto_attribs=True, slots=True)
+class MultiAgentGOATSPLMeasurementConfig(MeasurementConfig):
+    type: str = "MultiAgentGOATSPL"
 
 @attr.s(auto_attribs=True, slots=True)
 class SoftSPLMeasurementConfig(MeasurementConfig):
@@ -1890,6 +1893,12 @@ cs.store(
     group="habitat/task/measurements",
     name="goat_sub-task_spl",
     node=GOATSubTaskSPLMeasurementConfig,
+)
+cs.store(
+    package="habitat.task.measurements.multiagent_goat_spl",
+    group="habitat/task/measurements",
+    name="multiagent_goat_spl",
+    node=MultiAgentGOATSPLMeasurementConfig,
 )
 cs.store(
     package="habitat.task.measurements.soft_spl",
