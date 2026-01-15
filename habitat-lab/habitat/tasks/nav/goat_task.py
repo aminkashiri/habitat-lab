@@ -203,8 +203,8 @@ class GoatTask(NavigationTask):
         return super().reset(episode)
     
     def step(self, action: Dict[str, Any], episode: Episode):
-        obs = super().step(action, episode)
         self.update_goal = False
+        obs = super().step(action, episode)
         return obs
 
 @registry.register_task(name="MultiAgentGoat-v1")
