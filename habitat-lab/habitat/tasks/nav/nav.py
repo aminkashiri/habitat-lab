@@ -927,11 +927,13 @@ class MultiAgentGOATSPL(SPL):
             self._previous_positions[agent_id] = self._sim.get_agent_state(agent_id).position
             self._agents_episode_distance[agent_id] = 0.0
 
-        self._optimal_distance = self._get_optimal_distance(episode)
+        self._optimal_distance = -1
 
     def update_metric(
         self, episode, task: EmbodiedTask, *args: Any, **kwargs: Any
     ):
+        if self._optimal_distance == -1:
+            self._optimal_distance = self._get_optimal_distance(episode)
         ep_success = task.measurements.measures[
             MultiAgentGOATSuccess.cls_uuid
         ].get_metric().values()
@@ -948,12 +950,15 @@ class MultiAgentGOATSPL(SPL):
             )
             self._previous_positions[agent_id] = current_position
 
-        self._metric = ep_success * (
-            self._optimal_distance
-            / max(
-                self._optimal_distance, max(self._agents_episode_distance.values())
+        if self._optimal_distance is None:
+            self._metric = 0.0
+        else:
+            self._metric = ep_success * (
+                self._optimal_distance
+                / max(
+                    self._optimal_distance, max(self._agents_episode_distance.values())
+                )
             )
-        )
         # print(f"Retuning SPL {self._metric}, ep_success={ep_success}, agent_dist={self._agents_episode_distance} ")
 
 
@@ -1850,7 +1855,7 @@ class MultiAgentGOATSuccess(Success):
                 distance_to_target = distance_to_subgoal[goal_idx][agent_id]
             except KeyError:
                 print("tasks stops called: ", task.stops_called, goal_idx, agent_id)
-            self._metric[goal_idx] = distance_to_target < self._success_distance
+            self._metric[goal_idx] = 1.0 if distance_to_target < self._success_distance else 0.0
 
 @registry.register_measure
 class MultiAgentGOATDistanceToSubGoal(DistanceToGoal):
